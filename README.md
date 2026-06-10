@@ -1,19 +1,35 @@
 # porter
 
-> *One who carries.* A casket-encrypted, searchable **S3-bucket-as-a-filesystem** — mount a bucket, browse/search/read it locally, edit the occasional file, and have changes carried back as atomic versioned writes.
+> *One who carries.* A casket-encrypted, searchable **cloud-storage-as-a-filesystem** — mount a remote object store, browse/search/read it locally, edit the occasional file, and have changes carried back as atomic versioned writes. Built for **low-IO, read-mostly, offsite** storage.
 
-**Status:** design — pre-implementation. See [`docs/2026-05-29-porter-design.md`](docs/2026-05-29-porter-design.md).
+**Status:** design — pre-implementation. The core FS/manifest/check-in design is in [`docs/2026-05-29-porter-design.md`](docs/2026-05-29-porter-design.md); the current lead direction (pluggable backends, Google-Drive-first) is in [`docs/2026-06-11-google-drive-backend-design.md`](docs/2026-06-11-google-drive-backend-design.md).
 
-A CarriedWorldUniverse product (sibling to `nexus`, `cairn`, `casket`, `keel`). Built for **low-IO, read-mostly, offsite** storage — *not* a high-throughput filesystem, and explicitly **not** for git or databases (it's object-granular: whole-file writes, no in-place partial writes/locking).
+A CarriedWorldUniverse product (sibling to `nexus`, `cairn`, `casket`, `keel`). Object-granular by design — whole-file versioned writes, no in-place partial writes or cross-file locking. Explicitly **not** for git or databases, and **not** a high-throughput filesystem.
 
 ## What it is
 
-- Mounts an S3 (or S3-compatible) bucket as a local, navigable, searchable filesystem.
-- **Opt-in** per-file encryption via [casket](https://github.com/CarriedWorldUniverse) (per-file AEAD; plain buckets just mount).
-- In-RAM **manifest** (metadata + search, zero S3 round-trips); local cache + hydrate-on-open.
-- **check-out → edit locally → atomic versioned check-in** (conditional `PUT If-Match`); single-writer lease (via nexus) + non-blocking reads; type-aware 3-way merge on conflict.
-- Warns (and offers to enable) if the bucket lacks Versioning — required for merge + clobber-recovery.
+- Mounts a remote object store as a local, navigable, searchable filesystem.
+- **Opt-in** per-file encryption via [casket](https://github.com/CarriedWorldUniverse) (per-file AEAD; the remote holds opaque ciphertext blobs only — the storage provider never sees plaintext).
+- In-RAM **manifest** (metadata + search, zero remote round-trips); local cache + hydrate-on-open.
+- **check-out → edit locally → atomic versioned check-in** (conditional compare-and-swap write); single-writer lease (via nexus) + non-blocking reads; type-aware 3-way merge on conflict.
+
+## Backends — Drive-first, pluggable
+
+Storage is abstracted behind a minimal `ObjectBackend` seam (`Get` / `PutConditional` / `List` / `Changes` / `Versioning`, with capability flags so the core degrades gracefully). The correctness model — local-edit → atomic conditional check-in → MVCC isolation — is preserved across backends; it just calls `PutConditional` instead of any one provider directly.
+
+- **Google Drive — the first (v1) backend.** Drive addresses by opaque file ID (porter owns the path↔ID mapping in its manifest); conditional writes via ETag / `headRevisionId` preconditions; native revisions for versioning; the Drive **Changes API** as a first-class delta feed. Scoped to a dedicated app folder (`drive.file`), never the operator's whole Drive. Casket encrypts before bytes leave the cluster, so Google (and Google's AI) only ever see ciphertext.
+- **S3** — the original target, demoted to a **future** implementation of the same interface (`PUT If-Match`, versioning, SQS change events). Not implemented in v1.
+- No OneDrive / multi-cloud in v1 (one backend, done well; interface stays open).
+
+## Deployment shape
+
+Agents talk to a porter filesystem and **never know which cloud is underneath** — no Drive mounts on agent pods, no OAuth tokens scattered across the fleet. A single **backup/sync pod** owns the one Google connection, runs the sync, and absorbs Drive's rate limits + chunking. Two access patterns over the same backend + casket key:
+
+- **Shed FS (hot)** — porter mounted in the pods that need shared scratch / inter-agent comms; hydrate-on-open + atomic check-in; broker lease for contended files, optimistic `If-Match` otherwise.
+- **Backup (cold)** — the backup pod snapshots designated cluster data (sqld/`nexus.db` export, aspect PVCs, ledger, cairn repos) into a backup prefix on the same Drive, casket-sealed and revision-versioned, on the in-nexus scheduler. Restore = a porter check-out of the snapshot.
+
+The single Drive OAuth token lives in **custodian** and is brokered to the backup pod at use-time (short-lived access token per sync) — porter's Google Drive backend is custodian's first real cloud-credential customer.
 
 ## Status / open
 
-Design is complete (`docs/`). The one open decision is the **hydration mechanism** (FUSE on Linux/macOS — lead — vs the Windows Cloud-Files placeholder API vs a sync-daemon). Language/license TBD at implementation.
+Design-stage; no implementation yet. The core FS still owes its implementation. Open decisions include the hydration mechanism (FUSE lead vs Windows Cloud-Files placeholder vs sync-daemon), the Drive path model (lean flat-app-folder-with-manifest, per S3 parity), and backup scope + retention. Build is sequenced behind the roundtable week — see the Drive backend design doc for phasing.
