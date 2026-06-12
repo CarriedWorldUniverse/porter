@@ -26,6 +26,8 @@ func (s *Server) GetBackupStatus(_ context.Context, _ *cwbv1.GetBackupStatusRequ
 	}
 	if snap.LastAttempt != nil {
 		st.LastAttempt = timestamppb.New(*snap.LastAttempt)
+	}
+	if !snap.NextDue.IsZero() {
 		st.NextDue = timestamppb.New(snap.NextDue)
 	}
 	for _, src := range snap.Sources {

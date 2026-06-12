@@ -33,4 +33,25 @@ func TestGetBackupStatus(t *testing.T) {
 	if st.GetNextDue().AsTime() != now.Add(6*time.Hour) {
 		t.Fatalf("next_due = %v", st.GetNextDue().AsTime())
 	}
+
+	// Failure pass: last_success is retained, error + attempt + next_due are updated.
+	failureTime := now.Add(6 * time.Hour)
+	h.RecordFailure(failureTime, "drive: 503")
+	resp, err = srv.GetBackupStatus(context.Background(), &cwbv1.GetBackupStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = resp.GetStatus()
+	if st.GetLastSuccess().AsTime() != now {
+		t.Fatalf("last_success after failure = %v, want %v", st.GetLastSuccess().AsTime(), now)
+	}
+	if st.GetLastError() != "drive: 503" {
+		t.Fatalf("last_error = %q, want %q", st.GetLastError(), "drive: 503")
+	}
+	if st.GetLastAttempt().AsTime() != failureTime {
+		t.Fatalf("last_attempt = %v, want %v", st.GetLastAttempt().AsTime(), failureTime)
+	}
+	if st.GetNextDue().AsTime() != failureTime.Add(6*time.Hour) {
+		t.Fatalf("next_due after failure = %v, want %v", st.GetNextDue().AsTime(), failureTime.Add(6*time.Hour))
+	}
 }

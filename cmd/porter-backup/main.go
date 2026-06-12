@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -207,7 +208,7 @@ func serveStatus(ctx context.Context, h *status.Holder, log *slog.Logger) error 
 		srv.GracefulStop()
 	}()
 	go func() {
-		if err := srv.Serve(lis); err != nil {
+		if err := srv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			log.Error("status server exited", "error", err.Error())
 		}
 	}()
