@@ -33,6 +33,13 @@ import (
 //	PORTER_TLS_CERT/_KEY/_CA  client mTLS material for custodian + almanac
 //	PORTER_DRIVE_OAUTH_FILE   raw oauth bundle JSON file — the bare-metal
 //	                          restore path (no cluster, no custodian)
+//	PORTER_GRPC_ADDR          BackupStatusService listen addr (default :8087,
+//	                          sync loop mode only)
+//	PORTER_SERVER_TLS_CERT/_KEY/_CA  server mTLS material for the status
+//	                          service (distinct from PORTER_TLS_*, the
+//	                          client identity); required unless dev opt-out
+//	PORTER_DEV_INSECURE       set to 1 to run the status server without
+//	                          mTLS (local dev only — fail-closed otherwise)
 const (
 	envSourcesFile    = "PORTER_SOURCES_FILE"
 	envAlmanacAddr    = "PORTER_ALMANAC_GRPC_ADDR"
@@ -46,10 +53,16 @@ const (
 	envTLSKey         = "PORTER_TLS_KEY"
 	envTLSCA          = "PORTER_TLS_CA"
 	envDriveOAuthFile = "PORTER_DRIVE_OAUTH_FILE"
+	envGRPCAddr       = "PORTER_GRPC_ADDR"
+	envServerTLSCert  = "PORTER_SERVER_TLS_CERT"
+	envServerTLSKey   = "PORTER_SERVER_TLS_KEY"
+	envServerTLSCA    = "PORTER_SERVER_TLS_CA"
+	envDevInsecure    = "PORTER_DEV_INSECURE"
 
 	defaultAlmanacParam = "cwb/porter/backup/sources"
 	defaultDriveFolder  = "CarriedWorld-Porter/backups"
 	defaultInterval     = 6 * time.Hour
+	defaultGRPCAddr     = ":8087"
 )
 
 func envOr(key, fallback string) string {
