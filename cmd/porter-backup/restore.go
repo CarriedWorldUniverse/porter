@@ -12,6 +12,7 @@ import (
 	"github.com/CarriedWorldUniverse/porter/internal/drive"
 	"github.com/CarriedWorldUniverse/porter/internal/envelope"
 	"github.com/CarriedWorldUniverse/porter/internal/manifest"
+	"github.com/CarriedWorldUniverse/porter/internal/snapshot"
 )
 
 // runRestore restores a run: fetch + unseal the manifest, then download,
@@ -39,6 +40,18 @@ func runRestore(ctx context.Context, d *drive.Client, folder, ts, sourceFilter s
 	}
 
 	for _, e := range entries {
+		// Manifest fields are untrusted input: sealing needs only the
+		// recipient PUBLIC keys, so a compromised Drive account could plant
+		// a validly sealed manifest. Names and artifact file names must
+		// pass the same rules the sync side writes under — a single path
+		// segment, nothing that can step outside outDir.
+		if err := snapshot.ValidateName(e.Name); err != nil {
+			return fmt.Errorf("manifest entry rejected: %w", err)
+		}
+		if e.Artifact == "" || e.Artifact == "." || e.Artifact == ".." ||
+			e.Artifact != filepath.Base(e.Artifact) {
+			return fmt.Errorf("source %q: manifest artifact %q rejected: must be a bare file name", e.Name, e.Artifact)
+		}
 		rc, err := d.Download(ctx, e.DriveFileID)
 		if err != nil {
 			return fmt.Errorf("source %q: %w", e.Name, err)

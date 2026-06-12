@@ -38,6 +38,18 @@ type Source struct {
 	Excludes []string `yaml:"excludes,omitempty"`
 }
 
+// ValidateName checks that a source name is path-segment safe: it names the
+// artifact, the Drive snapshot folder, and the casket AAD object path.
+// Restore applies the SAME rule to names read back from a manifest —
+// manifests can be sealed by anyone holding the (non-secret) recipient
+// public keys, so decoded fields are untrusted input.
+func ValidateName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\ ") {
+		return fmt.Errorf("source name %q must be path-segment safe (no slashes, spaces, or dot segments)", name)
+	}
+	return nil
+}
+
 // ParseConfig parses and validates the sources YAML.
 func ParseConfig(data []byte) ([]Source, error) {
 	var srcs []Source
@@ -49,8 +61,8 @@ func ParseConfig(data []byte) ([]Source, error) {
 		if s.Name == "" {
 			return nil, fmt.Errorf("source %d: name is required", i)
 		}
-		if strings.ContainsAny(s.Name, "/\\ ") {
-			return nil, fmt.Errorf("source %q: name must be path-segment safe (no slashes or spaces)", s.Name)
+		if err := ValidateName(s.Name); err != nil {
+			return nil, err
 		}
 		if seen[s.Name] {
 			return nil, fmt.Errorf("duplicate source name %q", s.Name)
