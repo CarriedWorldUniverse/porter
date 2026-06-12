@@ -14,15 +14,26 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	cwbv1 "github.com/CarriedWorldUniverse/cwb-proto/gen/go/cwb/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/CarriedWorldUniverse/porter/internal/snapshot"
+	"github.com/CarriedWorldUniverse/porter/internal/status"
 )
 
 func main() {
@@ -112,6 +123,9 @@ func buildSyncEnv(ctx context.Context, log *slog.Logger) (syncEnv, error) {
 }
 
 func cmdSync(ctx context.Context, once bool, log *slog.Logger) error {
+	// holder records pass outcomes for the BackupStatusService (loop mode
+	// only — --once exits after one pass, nothing would serve the state).
+	var holder *status.Holder
 	pass := func() error {
 		// Rebuild per pass: credentials are brokered at use-time (lazy
 		// connection — a failed pass retries cleanly on the next tick).
@@ -123,6 +137,13 @@ func cmdSync(ctx context.Context, once bool, log *slog.Logger) error {
 		m, err := runSyncPass(ctx, env)
 		if err != nil {
 			return err
+		}
+		if holder != nil {
+			srcs := make([]status.Source, 0, len(m.Sources))
+			for _, s := range m.Sources {
+				srcs = append(srcs, status.Source{Name: s.Name, SizeBytes: s.Size})
+			}
+			holder.RecordSuccess(time.Now().UTC(), srcs)
 		}
 		log.Info("sync pass complete",
 			"timestamp", m.Timestamp,
@@ -139,12 +160,17 @@ func cmdSync(ctx context.Context, once bool, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	holder = status.NewHolder(every)
+	if err := serveStatus(ctx, holder, log); err != nil {
+		return err
+	}
 	log.Info("porter-backup sync loop starting", "interval", every.String())
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		if err := pass(); err != nil {
 			// Keep the loop alive: one failed pass must not kill the pod.
+			holder.RecordFailure(time.Now().UTC(), err.Error())
 			log.Error("sync pass failed", "error", err.Error())
 		}
 		select {
@@ -154,6 +180,79 @@ func cmdSync(ctx context.Context, once bool, log *slog.Logger) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// serveStatus starts the cwb.v1.BackupStatusService gRPC server (the Strata
+// map's backup clock) on PORTER_GRPC_ADDR, serving in a goroutine and
+// stopping gracefully on ctx cancellation. Startup failure is fatal to the
+// sync loop: a porter that can't report its clock should not run silently.
+func serveStatus(ctx context.Context, h *status.Holder, log *slog.Logger) error {
+	opts, err := statusServerOptions(log)
+	if err != nil {
+		return err
+	}
+	srv := grpc.NewServer(opts...)
+	cwbv1.RegisterBackupStatusServiceServer(srv, status.NewServer(h))
+
+	healthSrv := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(srv, healthSrv)
+	healthSrv.SetServingStatus("cwb.v1.BackupStatusService", grpc_health_v1.HealthCheckResponse_SERVING)
+
+	addr := envOr(envGRPCAddr, defaultGRPCAddr)
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("status server: listen %s: %w", addr, err)
+	}
+	go func() {
+		<-ctx.Done()
+		srv.GracefulStop()
+	}()
+	go func() {
+		if err := srv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			log.Error("status server exited", "error", err.Error())
+		}
+	}()
+	log.Info("backup status gRPC listening", "addr", addr)
+	return nil
+}
+
+// statusServerOptions builds the status server's gRPC options. When the
+// PORTER_SERVER_TLS_* env vars are set the server enforces mTLS
+// (RequireAndVerifyClientCert). Insecure mode requires an explicit
+// PORTER_DEV_INSECURE=1 opt-in; missing certs without the opt-in are a
+// startup error (fail-closed). These are the SERVER certs — distinct from
+// PORTER_TLS_* (porter's client identity toward custodian/almanac).
+func statusServerOptions(log *slog.Logger) ([]grpc.ServerOption, error) {
+	if os.Getenv(envDevInsecure) == "1" {
+		log.Warn("PORTER_DEV_INSECURE=1 — status server starting WITHOUT mTLS (dev only)")
+		return nil, nil
+	}
+	certFile := os.Getenv(envServerTLSCert)
+	keyFile := os.Getenv(envServerTLSKey)
+	caFile := os.Getenv(envServerTLSCA)
+	if certFile == "" || keyFile == "" || caFile == "" {
+		return nil, fmt.Errorf("status server: mTLS required — set %s/%s/%s (or %s=1 for local dev)",
+			envServerTLSCert, envServerTLSKey, envServerTLSCA, envDevInsecure)
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("status server: tls: load cert/key: %w", err)
+	}
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("status server: tls: read CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("status server: tls: no certs parsed from CA file %s", caFile)
+	}
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS13,
+	}
+	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}, nil
 }
 
 func cmdRestore(ctx context.Context, ts, source, keyFile, outDir string, log *slog.Logger) error {
