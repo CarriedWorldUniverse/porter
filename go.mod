@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/CarriedWorldUniverse/casket-go v0.1.1-0.20260612051152-0558c0b699d3
-	github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260612052157-11f4e54d318f
+	github.com/CarriedWorldUniverse/cwb-proto v0.0.0-20260612184909-72d9a7901296
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.284.0
 	google.golang.org/grpc v1.81.1
