@@ -1,0 +1,26 @@
+# porter-backup container — tiny static Go binary on scratch.
+# Build from the porter repo root:
+#   podman build -f cmd/porter-backup/Containerfile -t porter-backup:dev .
+#   podman save porter-backup:dev | sudo k3s ctr images import -
+#
+# porter-backup's sqlite snapshots use the pure-Go modernc.org/sqlite driver,
+# so the binary builds with CGO_ENABLED=0 and runs on scratch — no libc
+# needed. CA certificates are copied in for the Google OAuth/Drive TLS edge.
+#
+# Runtime config via env (see cmd/porter-backup/env.go):
+#   PORTER_SOURCES_FILE | PORTER_ALMANAC_GRPC_ADDR + PORTER_ALMANAC_PARAM,
+#   PORTER_RECIPIENTS, PORTER_DRIVE_FOLDER, PORTER_INTERVAL,
+#   CUSTODIAN_GRPC_ADDR, CUSTODIAN_ORG, PORTER_TLS_CERT/_KEY/_CA
+FROM docker.io/library/golang:1.26 AS build
+ENV GOTOOLCHAIN=auto
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/porter-backup ./cmd/porter-backup
+
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/porter-backup /porter-backup
+ENTRYPOINT ["/porter-backup"]
+CMD ["sync"]
