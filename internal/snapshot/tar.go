@@ -102,10 +102,22 @@ func snapshotTar(root, dst string, excludes []string) error {
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(tw, src)
+			// Write EXACTLY hdr.Size bytes — a point-in-time snapshot of the file
+			// as of the stat above. A live file (e.g. a session .jsonl an active
+			// agent is appending to) can grow or shrink between stat and read, but
+			// archive/tar demands precisely hdr.Size bytes: a plain io.Copy of the
+			// whole file would overrun on growth ("write too long") and fail the
+			// ENTIRE backup. io.CopyN caps the read at hdr.Size (dropping any
+			// concurrent growth); a concurrent shrink is zero-padded so the entry
+			// still matches its header.
+			n, cerr := io.CopyN(tw, src, hdr.Size)
 			src.Close()
-			if err != nil {
-				return fmt.Errorf("archiving %s: %w", rel, err)
+			if cerr == io.EOF {
+				if _, perr := tw.Write(make([]byte, hdr.Size-n)); perr != nil {
+					return fmt.Errorf("padding %s: %w", rel, perr)
+				}
+			} else if cerr != nil {
+				return fmt.Errorf("archiving %s: %w", rel, cerr)
 			}
 		}
 		return nil
