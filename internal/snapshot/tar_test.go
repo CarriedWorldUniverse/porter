@@ -142,6 +142,50 @@ func TestSnapshotTarExcludes(t *testing.T) {
 	}
 }
 
+// TestSnapshotTarConcurrentGrowth is the live-session .jsonl case: a file an
+// active agent keeps appending to while the snapshot runs. With a whole-file
+// io.Copy this overran the tar header size ("write too long") and failed the
+// entire croft-home backup — the reason transcripts were excluded. The
+// point-in-time io.CopyN must instead archive the file's size-at-stat and let
+// the backup complete.
+func TestSnapshotTarConcurrentGrowth(t *testing.T) {
+	root := t.TempDir()
+	big := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(big, make([]byte, 8<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		f, err := os.OpenFile(big, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		buf := make([]byte, 64<<10)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = f.Write(buf)
+			}
+		}
+	}()
+	out := filepath.Join(t.TempDir(), "a.tar.gz")
+	err := snapshotTar(root, out, nil)
+	close(stop)
+	<-done
+	if err != nil {
+		t.Fatalf("snapshotTar must tolerate a file growing during archiving: %v", err)
+	}
+	// tar.Reader enforces each entry's byte-count == its header Size, so a clean
+	// read proves the growing file was archived point-in-time, not overrun.
+	if _, ok := readTarGz(t, out)["session.jsonl"]; !ok {
+		t.Fatal("growing file missing from snapshot")
+	}
+}
+
 func TestSnapshotTarMissingRoot(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "a.tar.gz")
 	if err := snapshotTar(filepath.Join(t.TempDir(), "absent"), out, nil); err == nil {
