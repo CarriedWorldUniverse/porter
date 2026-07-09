@@ -1,0 +1,17 @@
+# porterpack container — static Go binary on a minimal alpine that carries
+# `git` (repo-snapshot/repo-restore shell out to git for bundle work).
+# Primarily consumed as an initContainer source: copy /usr/local/bin/porterpack
+# into a shared volume for a sidecar-less host process (e.g. cairn-server's
+# replication runner) to exec.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26 AS build
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/porterpack ./cmd/porterpack
+
+FROM docker.io/library/alpine:3.20
+RUN apk add --no-cache git
+COPY --from=build /out/porterpack /usr/local/bin/porterpack
+ENTRYPOINT ["/usr/local/bin/porterpack"]
