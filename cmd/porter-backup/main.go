@@ -1,7 +1,7 @@
 // porter-backup is the backup (cold) slice of porter: per-source consistent
 // snapshots → multi-recipient casket envelopes → a Google Drive app folder,
 // with per-run sealed manifests, a restore path that works from a single
-// recovery key, and 30-day/monthly-keeper retention.
+// recovery key, and 7-day rolling + weekly-keeper-to-one-month retention.
 //
 // Commands:
 //

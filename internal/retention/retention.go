@@ -1,15 +1,22 @@
 // Package retention implements porter-backup's prune policy as a pure
-// function: snapshots older than 30 days are deleted, EXCEPT the earliest
-// snapshot of each UTC calendar month (the "monthly keeper"), which is kept
-// forever. Manifests are never passed through this policy — they are never
-// pruned (the spec keeps all manifests).
+// function. Policy (operator, 2026-07-09): keep every snapshot from the last 7
+// days; older than that keep one snapshot per UTC ISO-week (the "weekly
+// keeper") out to a one-month horizon; delete everything older than the
+// horizon — INCLUDING weekly keepers (the horizon is a hard cap, unlike the
+// old monthly-keeper-forever policy). Manifests are never passed through this
+// policy — they are never pruned (the spec keeps all manifests).
 package retention
 
 import "time"
 
-// MaxAge is the rolling retention window: snapshots strictly older than this
-// are prune candidates (monthly keepers excepted).
-const MaxAge = 30 * 24 * time.Hour
+const (
+	// RollingWindow keeps every snapshot aged <= this (daily granularity in
+	// practice, since backups run more often than daily).
+	RollingWindow = 7 * 24 * time.Hour
+	// KeeperHorizon is the hard outer bound: nothing older than this is kept,
+	// weekly keepers included. "A month" of weekly keepers behind the window.
+	KeeperHorizon = 30 * 24 * time.Hour
+)
 
 // Item is one stored snapshot of a single source: an opaque identifier (e.g.
 // the Drive file id) and the snapshot's timestamp.
@@ -18,30 +25,31 @@ type Item struct {
 	Time time.Time
 }
 
-// ToDelete returns the items that the retention policy says to delete, given
-// one source's snapshot list and the current time. Order of the returned
-// items follows the input order. The input may be unsorted.
+// ToDelete returns the items the retention policy says to delete, given one
+// source's snapshot list and the current time. Order of the returned items
+// follows the input order. The input may be unsorted.
 //
 // Policy:
-//   - items aged <= MaxAge (relative to now) are kept;
-//   - of the items strictly older than MaxAge, the earliest item of each UTC
-//     calendar month is kept (first-of-month keeper);
-//   - everything else older than MaxAge is deleted.
+//   - aged <= RollingWindow (7d)           → keep (all of them);
+//   - RollingWindow < aged <= KeeperHorizon → keep iff it is the earliest
+//     snapshot of its UTC ISO-week (the weekly keeper); else delete;
+//   - aged > KeeperHorizon (1 month)        → delete, weekly keepers included.
 func ToDelete(items []Item, now time.Time) []Item {
-	cutoff := now.Add(-MaxAge)
+	rollingCutoff := now.Add(-RollingWindow)
+	horizonCutoff := now.Add(-KeeperHorizon)
 
-	// Earliest item per UTC (year, month) bucket across ALL items — the
-	// monthly keeper. Computing keepers over all items (not just the old
-	// ones) is deliberate: the earliest snapshot of a month stays the
-	// keeper as it ages past the cutoff.
-	type bucket struct {
-		year  int
-		month time.Month
+	// Earliest item per UTC ISO-week bucket across ALL items — the weekly
+	// keeper. Computing keepers over all items (not just old ones) is
+	// deliberate: the earliest snapshot of a week stays the keeper as it ages
+	// past the rolling window.
+	type week struct {
+		isoYear int
+		isoWeek int
 	}
-	earliest := make(map[bucket]int) // bucket -> index of earliest item
+	earliest := make(map[week]int) // bucket -> index of earliest item
 	for i, it := range items {
-		u := it.Time.UTC()
-		b := bucket{u.Year(), u.Month()}
+		y, w := it.Time.UTC().ISOWeek()
+		b := week{y, w}
 		j, ok := earliest[b]
 		if !ok || it.Time.Before(items[j].Time) {
 			earliest[b] = i
@@ -54,10 +62,14 @@ func ToDelete(items []Item, now time.Time) []Item {
 
 	var out []Item
 	for i, it := range items {
-		if !it.Time.Before(cutoff) { // aged <= MaxAge: kept
+		if !it.Time.Before(rollingCutoff) { // within 7d: keep
 			continue
 		}
-		if keeper[i] {
+		if it.Time.Before(horizonCutoff) { // older than the horizon: delete, keeper or not
+			out = append(out, it)
+			continue
+		}
+		if keeper[i] { // 7d..1mo: weekly keeper survives
 			continue
 		}
 		out = append(out, it)
