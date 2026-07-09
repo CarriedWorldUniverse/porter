@@ -8,6 +8,8 @@
 //	porterpack put -store <dir> -key <privfile> -recipient <pubfile> [...] -name <artifact> -in <file>
 //	porterpack ls -store <dir> -key <privfile>
 //	porterpack get -store <dir> -key <privfile> -name <artifact> -out <file>
+//	porterpack repo-snapshot -store <dir> -key <privfile> -recipient <pubfile> [...] -name <replica> -repo <path>
+//	porterpack repo-restore -store <dir> -key <privfile> -name <replica> -out <path>
 package main
 
 import (
@@ -28,7 +30,9 @@ func usage() error {
 		"init -store <dir> -recipient <pubfile>... [-pack-size N] [-chunk-size N] | " +
 		"put -store <dir> -key <privfile> -recipient <pubfile>... -name <name> -in <file> | " +
 		"ls -store <dir> -key <privfile> | " +
-		"get -store <dir> -key <privfile> -name <name> -out <file>>")
+		"get -store <dir> -key <privfile> -name <name> -out <file> | " +
+		"repo-snapshot -store <dir> -key <privfile> -recipient <pubfile>... -name <replica> -repo <path> | " +
+		"repo-restore -store <dir> -key <privfile> -name <replica> -out <path>>")
 }
 
 // repeatedFlag collects repeated -recipient flags in order.
@@ -113,6 +117,36 @@ func run(args []string) error {
 			return usage()
 		}
 		return cmdGet(*store, *keyFile, *name, *out)
+
+	case "repo-snapshot":
+		fs := flag.NewFlagSet("repo-snapshot", flag.ExitOnError)
+		store := fs.String("store", "", "store directory")
+		keyFile := fs.String("key", "", "recipient private key file")
+		var recipients repeatedFlag
+		fs.Var(&recipients, "recipient", "recipient public key file (repeatable)")
+		name := fs.String("name", "", "replica name")
+		repo := fs.String("repo", "", "path to the git repository to snapshot")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *store == "" || *keyFile == "" || len(recipients) == 0 || *name == "" || *repo == "" {
+			return usage()
+		}
+		return cmdRepoSnapshot(*store, *keyFile, []string(recipients), *name, *repo)
+
+	case "repo-restore":
+		fs := flag.NewFlagSet("repo-restore", flag.ExitOnError)
+		store := fs.String("store", "", "store directory")
+		keyFile := fs.String("key", "", "recipient private key file")
+		name := fs.String("name", "", "replica name")
+		out := fs.String("out", "", "output directory (must not exist)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *store == "" || *keyFile == "" || *name == "" || *out == "" {
+			return usage()
+		}
+		return cmdRepoRestore(*store, *keyFile, *name, *out)
 
 	default:
 		return usage()

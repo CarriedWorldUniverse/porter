@@ -6,6 +6,7 @@ import (
 
 	casket "github.com/CarriedWorldUniverse/casket-go"
 
+	"github.com/CarriedWorldUniverse/porter/internal/gitreplica"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore/localdir"
 )
@@ -146,5 +147,54 @@ func cmdGet(storeDir, keyFile, name, outFile string) error {
 		return fmt.Errorf("writing %s: %w", outFile, err)
 	}
 	fmt.Printf("wrote %s (%d bytes)\n", outFile, len(data))
+	return nil
+}
+
+func cmdRepoSnapshot(storeDir, keyFile string, recipientFiles []string, name, repoPath string) error {
+	priv, err := readKeyFile(keyFile)
+	if err != nil {
+		return err
+	}
+	recipients, err := readRecipients(recipientFiles)
+	if err != nil {
+		return err
+	}
+	b, err := localdir.New(storeDir)
+	if err != nil {
+		return err
+	}
+	w, err := packstore.OpenWriter(b, priv, recipients)
+	if err != nil {
+		return fmt.Errorf("opening store: %w", err)
+	}
+	seq, refsCount, noChange, err := gitreplica.Snapshot(w, name, repoPath)
+	if err != nil {
+		return fmt.Errorf("snapshotting %q: %w", name, err)
+	}
+	if noChange {
+		fmt.Printf("replica %q unchanged (seq=%d, %d refs)\n", name, seq, refsCount)
+		return nil
+	}
+	fmt.Printf("snapshotted replica %q as bundle-%08d (%d refs)\n", name, seq, refsCount)
+	return nil
+}
+
+func cmdRepoRestore(storeDir, keyFile, name, outPath string) error {
+	priv, err := readKeyFile(keyFile)
+	if err != nil {
+		return err
+	}
+	b, err := localdir.New(storeDir)
+	if err != nil {
+		return err
+	}
+	r, err := packstore.OpenReader(b, priv)
+	if err != nil {
+		return fmt.Errorf("opening store: %w", err)
+	}
+	if err := gitreplica.Restore(r, name, outPath); err != nil {
+		return fmt.Errorf("restoring %q: %w", name, err)
+	}
+	fmt.Printf("restored replica %q to %s\n", name, outPath)
 	return nil
 }
