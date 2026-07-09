@@ -1,4 +1,4 @@
-# Publish the container image to GHCR on push to main + version tags (Layer 2:
+# Publish the container images to GHCR on push to main + version tags (Layer 2:
 # recovery + deploy become pull-not-build, NEX-626). Deps are public; no auth.
 name: release-image
 on:
@@ -11,6 +11,13 @@ permissions:
 jobs:
   image:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: porter-backup
+            file: cmd/porter-backup/Containerfile
+          - name: porterpack
+            file: cmd/porterpack/Containerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -23,7 +30,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/carriedworlduniverse/porter-backup
+          images: ghcr.io/carriedworlduniverse/${{ matrix.name }}
           tags: |
             type=raw,value=main,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
@@ -31,7 +38,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: cmd/porter-backup/Containerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
