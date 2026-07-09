@@ -37,8 +37,8 @@ func TestRetentionPolicy(t *testing.T) {
 
 	items := []Item{
 		at("now", 0),
-		at("d3", 3*day),   // within 7d → keep
-		at("d7", 7*day),    // exactly 7d: aged == window → within (not before cutoff) → keep
+		at("d3", 3*day), // within 7d → keep
+		at("d7", 7*day), // exactly 7d: aged == window → within (not before cutoff) → keep
 		// same ISO week (Mon Jun 22 – Sun Jun 28), both >7d: only earliest kept
 		at("w2_early", 12*day), // Fri Jun 26
 		at("w2_late", 10*day),  // Sun Jun 28 (same week) → deleted (not the keeper)

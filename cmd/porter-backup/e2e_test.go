@@ -129,10 +129,10 @@ func TestEndToEndBackupAndRecoveryKeyRestore(t *testing.T) {
 	// now = Fri 2026-06-12. Bands: <7d keep; 7–30d keep one weekly keeper per
 	// ISO week; >30d delete (even a lone-week keeper).
 	recentID := fakeDrive.AddFile(almanacFolder, "20260610T120000Z.casket", []byte("recent"))       // 2d old → within 7d → KEPT
-	weekKeeperID := fakeDrive.AddFile(almanacFolder, "20260602T120000Z.casket", []byte("wk"))        // Tue, wk Jun1–7, earliest → KEPT
-	weekPrunedID := fakeDrive.AddFile(almanacFolder, "20260604T120000Z.casket", []byte("wk2"))       // Thu, same wk, not earliest → PRUNED
-	pastHorizonID := fakeDrive.AddFile(almanacFolder, "20260301T120000Z.casket", []byte("ancient"))  // >30d, lone-week keeper → PRUNED
-	strangerID := fakeDrive.AddFile(almanacFolder, "README.txt", []byte("not porter's"))             // unparseable → NEVER touched
+	weekKeeperID := fakeDrive.AddFile(almanacFolder, "20260602T120000Z.casket", []byte("wk"))       // Tue, wk Jun1–7, earliest → KEPT
+	weekPrunedID := fakeDrive.AddFile(almanacFolder, "20260604T120000Z.casket", []byte("wk2"))      // Thu, same wk, not earliest → PRUNED
+	pastHorizonID := fakeDrive.AddFile(almanacFolder, "20260301T120000Z.casket", []byte("ancient")) // >30d, lone-week keeper → PRUNED
+	strangerID := fakeDrive.AddFile(almanacFolder, "README.txt", []byte("not porter's"))            // unparseable → NEVER touched
 	manifestsFolder, err := env.Drive.EnsureFolder(ctx, e2eFolder+"/manifests")
 	if err != nil {
 		t.Fatal(err)
