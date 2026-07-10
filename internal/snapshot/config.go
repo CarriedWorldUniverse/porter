@@ -23,7 +23,7 @@ type SecretRef struct {
 
 // Source is one backup source from the sources config (the almanac parameter
 // `cwb/porter/backup/sources`, or a local YAML file): a top-level YAML list
-// of `{name, type, path|secrets, excludes}`.
+// of `{name, type, path|secrets, excludes, includes, max_bytes}`.
 type Source struct {
 	// Name is the source's unique name; it names the artifact and the Drive
 	// snapshot folder, so it must be path-segment safe.
@@ -36,6 +36,18 @@ type Source struct {
 	Secrets []SecretRef `yaml:"secrets,omitempty"`
 	// Excludes are glob patterns pruned from a tar source (see snapshotTar).
 	Excludes []string `yaml:"excludes,omitempty"`
+	// Includes is an optional ALLOWLIST for a tar source: when non-empty, only
+	// paths it selects are archived (excludes still subtract). This inverts the
+	// default block-list model — safer for a large tree that's mostly
+	// re-creatable, where a new big directory should be ignored by DEFAULT
+	// rather than silently ballooning the backup. See snapshotTar for the match
+	// rules. Empty = archive everything (block-list mode).
+	Includes []string `yaml:"includes,omitempty"`
+	// MaxBytes caps the staged (compressed) tar artifact for this source. When
+	// the archive exceeds it the snapshot fails LOUDLY rather than filling the
+	// work volume until the kubelet evicts the pod. 0 = the package default
+	// (DefaultMaxTarBytes). Tar sources only.
+	MaxBytes int64 `yaml:"max_bytes,omitempty"`
 }
 
 // ValidateName checks that a source name is path-segment safe: it names the
@@ -86,6 +98,12 @@ func ParseConfig(data []byte) ([]Source, error) {
 			return nil, fmt.Errorf("source %q: type is required", s.Name)
 		default:
 			return nil, fmt.Errorf("source %q: unknown type %q (want %s|%s|%s)", s.Name, s.Type, TypeSQLite, TypeTar, TypeSecrets)
+		}
+		if s.Type != TypeTar && (len(s.Includes) > 0 || s.MaxBytes != 0) {
+			return nil, fmt.Errorf("source %q: includes/max_bytes apply only to %s sources", s.Name, TypeTar)
+		}
+		if s.MaxBytes < 0 {
+			return nil, fmt.Errorf("source %q: max_bytes must be >= 0", s.Name)
 		}
 	}
 	return srcs, nil

@@ -58,6 +58,9 @@ func TestParseConfigValidation(t *testing.T) {
 		"secret missing name":  `[{name: a, type: secrets, secrets: [{ns: cwb}]}]`,
 		"duplicate names":      `[{name: a, type: sqlite, path: /x}, {name: a, type: tar, path: /y}]`,
 		"name with slash":      `[{name: "a/b", type: sqlite, path: /x}]`,
+		"includes on non-tar":  `[{name: a, type: sqlite, path: /x, includes: [".claude"]}]`,
+		"max_bytes on non-tar": `[{name: a, type: secrets, secrets: [{ns: cwb, name: s}], max_bytes: 100}]`,
+		"negative max_bytes":   `[{name: a, type: tar, path: /x, max_bytes: -1}]`,
 		"not yaml":             `:[`,
 	}
 	for label, cfg := range cases {

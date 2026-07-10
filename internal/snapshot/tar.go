@@ -24,10 +24,20 @@ import (
 // prunes its whole subtree. Examples: "src" (subtree), "*.tmp" (any depth),
 // "work/cache" (specific subtree).
 //
+// includes, when non-empty, is an ALLOWLIST: only selected paths are archived
+// (excludes still subtract). A pattern without '/' is anchored at the root and
+// path.Match'd against an entry's FIRST segment, so it selects a whole
+// top-level entry and its subtree (".claude", "*.md"); a pattern WITH '/' is
+// an exact rel-path prefix selecting that path and everything under it
+// ("a/b" → "a/b" and "a/b/…"). Empty includes archives everything.
+//
+// maxBytes (>0) caps the compressed artifact: exceeding it fails the snapshot
+// LOUDLY instead of filling the work volume until the pod is evicted.
+//
 // Regular files, directories, and symlinks are archived; sockets/devices/
 // fifos are skipped (croft home has live sockets — they are not backup
 // state). Symlink targets are recorded, never followed.
-func snapshotTar(root, dst string, excludes []string) error {
+func snapshotTar(root, dst string, excludes, includes []string, maxBytes int64) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("tar source: %w", err)
@@ -43,8 +53,10 @@ func snapshotTar(root, dst string, excludes []string) error {
 	defer f.Close()
 
 	// gzip.Writer with an untouched zero header (no ModTime, no Name) is
-	// byte-deterministic for identical input.
-	gz := gzip.NewWriter(f)
+	// byte-deterministic for identical input. The capped writer bounds actual
+	// work-volume disk use — the compressed size is what lands on /work.
+	capped := &cappedWriter{w: f, max: maxBytes}
+	gz := gzip.NewWriter(capped)
 	tw := tar.NewWriter(gz)
 
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -63,6 +75,16 @@ func snapshotTar(root, dst string, excludes []string) error {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		// Allowlist: prune a directory the allowlist can't reach; drop a file it
+		// doesn't select. An in-scope ancestor directory is still archived (kept
+		// for structure on the way down to an included path).
+		if d.IsDir() {
+			if !descendTar(rel, includes) {
+				return filepath.SkipDir
+			}
+		} else if !keptTar(rel, includes) {
 			return nil
 		}
 
@@ -132,6 +154,64 @@ func snapshotTar(root, dst string, excludes []string) error {
 		return fmt.Errorf("finalizing gzip: %w", err)
 	}
 	return f.Close()
+}
+
+// cappedWriter fails once total bytes written exceed max (>0). It bounds the
+// staged tar's work-volume footprint so a runaway source errors loudly instead
+// of filling /work until the kubelet evicts the pod (exit 137).
+type cappedWriter struct {
+	w   io.Writer
+	n   int64
+	max int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if c.max > 0 && c.n+int64(len(p)) > c.max {
+		return 0, fmt.Errorf("staged tar exceeded max size %d bytes — refusing to fill the work volume; tighten the source's includes/excludes or raise its max_bytes", c.max)
+	}
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// keptTar reports whether an entry is selected by the include allowlist. Empty
+// includes selects everything. A slash-less pattern is anchored at the root and
+// matched (path.Match) against the entry's first segment — selecting a whole
+// top-level entry and its subtree. A pattern with a slash is an exact rel-path
+// prefix, selecting that path and everything beneath it.
+func keptTar(rel string, includes []string) bool {
+	if len(includes) == 0 {
+		return true
+	}
+	seg0 := rel
+	if i := strings.IndexByte(rel, '/'); i >= 0 {
+		seg0 = rel[:i]
+	}
+	for _, pat := range includes {
+		if strings.Contains(pat, "/") {
+			if rel == pat || strings.HasPrefix(rel, pat+"/") {
+				return true
+			}
+		} else if ok, _ := path.Match(pat, seg0); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// descendTar reports whether the walk should recurse into directory rel under
+// the allowlist: either the directory is itself selected (whole subtree in) or
+// an included path lives beneath it (an ancestor on the way down).
+func descendTar(rel string, includes []string) bool {
+	if len(includes) == 0 || keptTar(rel, includes) {
+		return true
+	}
+	for _, pat := range includes {
+		if strings.Contains(pat, "/") && strings.HasPrefix(pat, rel+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // excluded reports whether a slash-relative path is pruned by the exclude
