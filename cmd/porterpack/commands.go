@@ -12,6 +12,8 @@ import (
 	"github.com/CarriedWorldUniverse/porter/internal/packstore"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore/drivebackend"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore/localdir"
+	"github.com/CarriedWorldUniverse/porter/internal/packstore/s3backend"
+	"github.com/CarriedWorldUniverse/porter/internal/s3"
 )
 
 // cmdKeygen generates a fresh X25519 recipient keypair and writes the raw
@@ -218,6 +220,24 @@ func driveBackendFromEnv(ctx context.Context, folderPath string) (packstore.Back
 		return nil, fmt.Errorf("ensure folder %q: %w", folderPath, err)
 	}
 	return drivebackend.New(ctx, client, folderID), nil
+}
+
+// s3BackendFromEnv builds a packstore.Backend backed by an S3-compatible
+// bucket under keyPrefix, using the credentials file named by
+// PORTER_S3_CREDS_FILE. It also returns an "s3://<bucket>/<prefix>"
+// description for summary output.
+func s3BackendFromEnv(ctx context.Context, keyPrefix string) (packstore.Backend, string, error) {
+	path := os.Getenv("PORTER_S3_CREDS_FILE")
+	if path == "" {
+		return nil, "", fmt.Errorf("PORTER_S3_CREDS_FILE not set")
+	}
+	creds, err := s3.CredentialsFromFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	client := s3.New(creds, nil)
+	dst := s3backend.New(ctx, client, keyPrefix)
+	return dst, fmt.Sprintf("s3://%s/%s", creds.Bucket, keyPrefix), nil
 }
 
 func cmdRepoRestore(storeDir, keyFile, name, outPath string) error {
