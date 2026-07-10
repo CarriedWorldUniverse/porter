@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -107,31 +106,7 @@ func driveOAuth(ctx context.Context) (drive.OAuth, error) {
 	if path := os.Getenv(envDriveOAuthFile); path != "" {
 		// The bundle file holds the refresh token — refuse group/world-
 		// readable files (same posture as SSH identity files).
-		info, err := os.Stat(path)
-		if err != nil {
-			return drive.OAuth{}, fmt.Errorf("oauth bundle file: %w", err)
-		}
-		if perm := info.Mode().Perm(); perm&0o077 != 0 {
-			return drive.OAuth{}, fmt.Errorf("oauth bundle file %s has loose permissions %04o: it holds the refresh token, chmod it to 0600", path, perm)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return drive.OAuth{}, fmt.Errorf("oauth bundle file: %w", err)
-		}
-		var b struct {
-			ClientID     string `json:"client_id"`
-			ClientSecret string `json:"client_secret"`
-			RefreshToken string `json:"refresh_token"`
-			TokenURI     string `json:"token_uri"`
-			Scope        string `json:"scope"`
-		}
-		if err := json.Unmarshal(data, &b); err != nil {
-			return drive.OAuth{}, fmt.Errorf("oauth bundle file %s: %w", path, err)
-		}
-		return drive.OAuth{
-			ClientID: b.ClientID, ClientSecret: b.ClientSecret,
-			RefreshToken: b.RefreshToken, TokenURI: b.TokenURI, Scope: b.Scope,
-		}, nil
+		return drive.OAuthFromBundleFile(path)
 	}
 
 	addr := os.Getenv(envCustodianAddr)

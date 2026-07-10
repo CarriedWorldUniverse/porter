@@ -89,7 +89,7 @@ func (b *Backend) Put(name string, data []byte) error {
 	if _, ok, err := b.resolveLocked(name); err != nil {
 		return err
 	} else if ok {
-		return fmt.Errorf("drivebackend: put %s: already exists", name)
+		return fmt.Errorf("drivebackend: put %s: %w", name, packstore.ErrExists)
 	}
 
 	id, err := b.c.Upload(b.ctx, name, b.folderID, bytes.NewReader(data))

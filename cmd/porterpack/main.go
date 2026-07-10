@@ -10,12 +10,16 @@
 //	porterpack get -store <dir> -key <privfile> -name <artifact> -out <file>
 //	porterpack repo-snapshot -store <dir> -key <privfile> -recipient <pubfile> [...] -name <replica> -repo <path>
 //	porterpack repo-restore -store <dir> -key <privfile> -name <replica> -out <path>
+//	porterpack mirror -from <dir> (-to <dir> | -to-drive <drive folder path>)
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/CarriedWorldUniverse/porter/internal/packstore/localdir"
 )
 
 func main() {
@@ -32,7 +36,8 @@ func usage() error {
 		"ls -store <dir> -key <privfile> | " +
 		"get -store <dir> -key <privfile> -name <name> -out <file> | " +
 		"repo-snapshot -store <dir> -key <privfile> -recipient <pubfile>... -name <replica> -repo <path> | " +
-		"repo-restore -store <dir> -key <privfile> -name <replica> -out <path>>")
+		"repo-restore -store <dir> -key <privfile> -name <replica> -out <path> | " +
+		"mirror -from <dir> (-to <dir> | -to-drive <drive folder path>)>")
 }
 
 // repeatedFlag collects repeated -recipient flags in order.
@@ -147,6 +152,30 @@ func run(args []string) error {
 			return usage()
 		}
 		return cmdRepoRestore(*store, *keyFile, *name, *out)
+
+	case "mirror":
+		fs := flag.NewFlagSet("mirror", flag.ExitOnError)
+		from := fs.String("from", "", "source store directory")
+		to := fs.String("to", "", "destination store directory (localdir)")
+		toDrive := fs.String("to-drive", "", "destination Drive folder path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *from == "" || (*to == "") == (*toDrive == "") {
+			return usage()
+		}
+		if *to != "" {
+			dst, err := localdir.New(*to)
+			if err != nil {
+				return err
+			}
+			return cmdMirror(*from, dst, *to)
+		}
+		dst, err := driveBackendFromEnv(context.Background(), *toDrive)
+		if err != nil {
+			return err
+		}
+		return cmdMirror(*from, dst, *toDrive)
 
 	default:
 		return usage()

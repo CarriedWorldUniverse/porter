@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/CarriedWorldUniverse/porter/internal/packstore"
 )
 
 // Dir is a packstore.Backend rooted at a local directory.
@@ -33,7 +35,7 @@ func New(path string) (*Dir, error) {
 func (d *Dir) Put(name string, data []byte) error {
 	final := filepath.Join(d.root, name)
 	if _, err := os.Stat(final); err == nil {
-		return fmt.Errorf("packstore/localdir: put %s: already exists", name)
+		return fmt.Errorf("packstore/localdir: put %s: %w", name, packstore.ErrExists)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("packstore/localdir: put %s: stat: %w", name, err)
 	}

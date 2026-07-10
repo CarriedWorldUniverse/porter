@@ -14,13 +14,23 @@
 // itself only ever stores ciphertext.
 package packstore
 
+import "errors"
+
+// ErrExists is the sentinel a Backend's Put must wrap (fmt.Errorf("...: %w",
+// ErrExists)) when it refuses to overwrite an existing object. Callers that
+// need to distinguish "already there" from a genuine failure — e.g. Mirror,
+// racing another writer/mirror on the same name — check errors.Is(err,
+// ErrExists).
+var ErrExists = errors.New("packstore: object already exists")
+
 // Backend is the write-once object store packstore runs on top of. Object
 // names are opaque strings chosen by packstore; a Backend must not inspect
 // or interpret them beyond byte-for-byte storage, lookup, and prefix
 // listing.
 type Backend interface {
-	// Put writes name's contents. It MUST fail if name already exists —
-	// packstore relies on write-once semantics for crash consistency.
+	// Put writes name's contents. It MUST fail, wrapping ErrExists, if name
+	// already exists — packstore relies on write-once semantics for crash
+	// consistency.
 	Put(name string, data []byte) error
 	// Get reads name's full contents.
 	Get(name string) ([]byte, error)

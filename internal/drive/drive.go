@@ -12,9 +12,11 @@ package drive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -55,6 +57,40 @@ func (o OAuth) TokenSource(ctx context.Context) oauth2.TokenSource {
 		Scopes:       strings.Fields(o.Scope),
 	}
 	return cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: o.RefreshToken})
+}
+
+// OAuthFromBundleFile loads a raw oauth bundle JSON file (the bare-metal,
+// no-cluster path used by porter-backup's file fallback and one-shot tools
+// like packstore-smoke and porterpack). The bundle holds the refresh token,
+// so the file must not be group/world-readable (same posture as SSH
+// identity files) — OAuthFromBundleFile refuses any mode with perm&0o077 !=
+// 0.
+func OAuthFromBundleFile(path string) (OAuth, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return OAuth{}, fmt.Errorf("oauth bundle file: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return OAuth{}, fmt.Errorf("oauth bundle file %s has loose permissions %04o: it holds the refresh token, chmod it to 0600", path, perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return OAuth{}, fmt.Errorf("oauth bundle file: %w", err)
+	}
+	var b struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		RefreshToken string `json:"refresh_token"`
+		TokenURI     string `json:"token_uri"`
+		Scope        string `json:"scope"`
+	}
+	if err := json.Unmarshal(data, &b); err != nil {
+		return OAuth{}, fmt.Errorf("oauth bundle file %s: %w", path, err)
+	}
+	return OAuth{
+		ClientID: b.ClientID, ClientSecret: b.ClientSecret,
+		RefreshToken: b.RefreshToken, TokenURI: b.TokenURI, Scope: b.Scope,
+	}, nil
 }
 
 // File is a listed Drive file.
