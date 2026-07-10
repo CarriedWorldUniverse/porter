@@ -35,6 +35,20 @@ type Runner struct {
 	Kube kubernetes.Interface
 }
 
+// DefaultMaxTarBytes caps a tar source's staged (compressed) artifact when the
+// source sets no max_bytes. Sits well above legitimate sources yet below the
+// porter-backup pod's 8Gi work-volume limit, so a runaway tree fails loudly
+// (see cappedWriter) instead of OOM-evicting the pod.
+const DefaultMaxTarBytes = 4 << 30 // 4 GiB
+
+// maxTarBytes is the source's max_bytes override, or the package default.
+func maxTarBytes(src Source) int64 {
+	if src.MaxBytes > 0 {
+		return src.MaxBytes
+	}
+	return DefaultMaxTarBytes
+}
+
 // Run snapshots one source into workDir and returns the artifact with its
 // plaintext hash and size. Artifact file names are <name> + a type-fixed
 // extension (.db / .tar.gz / .yaml).
@@ -48,7 +62,7 @@ func (r Runner) Run(ctx context.Context, src Source, workDir string) (Artifact, 
 		}
 	case TypeTar:
 		out = filepath.Join(workDir, src.Name+".tar.gz")
-		if err := snapshotTar(src.Path, out, src.Excludes); err != nil {
+		if err := snapshotTar(src.Path, out, src.Excludes, src.Includes, maxTarBytes(src)); err != nil {
 			return Artifact{}, fmt.Errorf("source %q: %w", src.Name, err)
 		}
 	case TypeSecrets:

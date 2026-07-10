@@ -3,10 +3,12 @@ package snapshot
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha256"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -88,7 +90,7 @@ func sha256File(t *testing.T, p string) [32]byte {
 func TestSnapshotTarContents(t *testing.T) {
 	root := fixtureTree(t)
 	out := filepath.Join(t.TempDir(), "a.tar.gz")
-	if err := snapshotTar(root, out, nil); err != nil {
+	if err := snapshotTar(root, out, nil, nil, 0); err != nil {
 		t.Fatalf("snapshotTar: %v", err)
 	}
 	got := readTarGz(t, out)
@@ -110,10 +112,10 @@ func TestSnapshotTarDeterministic(t *testing.T) {
 	root := fixtureTree(t)
 	dir := t.TempDir()
 	a, b := filepath.Join(dir, "a.tar.gz"), filepath.Join(dir, "b.tar.gz")
-	if err := snapshotTar(root, a, nil); err != nil {
+	if err := snapshotTar(root, a, nil, nil, 0); err != nil {
 		t.Fatalf("snapshotTar a: %v", err)
 	}
-	if err := snapshotTar(root, b, nil); err != nil {
+	if err := snapshotTar(root, b, nil, nil, 0); err != nil {
 		t.Fatalf("snapshotTar b: %v", err)
 	}
 	if sha256File(t, a) != sha256File(t, b) {
@@ -124,7 +126,7 @@ func TestSnapshotTarDeterministic(t *testing.T) {
 func TestSnapshotTarExcludes(t *testing.T) {
 	root := fixtureTree(t)
 	out := filepath.Join(t.TempDir(), "a.tar.gz")
-	if err := snapshotTar(root, out, []string{"src", "work", "*.tmp"}); err != nil {
+	if err := snapshotTar(root, out, []string{"src", "work", "*.tmp"}, nil, 0); err != nil {
 		t.Fatalf("snapshotTar: %v", err)
 	}
 	got := readTarGz(t, out)
@@ -173,7 +175,7 @@ func TestSnapshotTarConcurrentGrowth(t *testing.T) {
 		}
 	}()
 	out := filepath.Join(t.TempDir(), "a.tar.gz")
-	err := snapshotTar(root, out, nil)
+	err := snapshotTar(root, out, nil, nil, 0)
 	close(stop)
 	<-done
 	if err != nil {
@@ -188,7 +190,102 @@ func TestSnapshotTarConcurrentGrowth(t *testing.T) {
 
 func TestSnapshotTarMissingRoot(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "a.tar.gz")
-	if err := snapshotTar(filepath.Join(t.TempDir(), "absent"), out, nil); err == nil {
+	if err := snapshotTar(filepath.Join(t.TempDir(), "absent"), out, nil, nil, 0); err == nil {
 		t.Fatal("want error for missing root")
+	}
+}
+
+// allowlistTree mirrors the croft-home shape: a few precious paths amid bulk
+// that should be ignored by DEFAULT under an allowlist.
+func allowlistTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("notes.md", "design doc")             // include via "*.md"
+	write(".claude/skills/s.md", "a skill")     // include via ".claude"
+	write(".claude/projects/x/sess.jsonl", "…") // under .claude but excluded
+	write(".config/app.conf", "cfg")            // NOT included
+	write("models/big.bin", "19G of weights")   // NOT included — the bulk
+	write("deep/a/b/target.txt", "reached")     // include via slashed "deep/a/b"
+	write("deep/a/other.txt", "sibling")        // sibling of b, NOT under include
+	return root
+}
+
+func TestSnapshotTarIncludesAllowlist(t *testing.T) {
+	root := allowlistTree(t)
+	out := filepath.Join(t.TempDir(), "a.tar.gz")
+	includes := []string{".claude", "*.md", "deep/a/b"}
+	excludes := []string{".claude/projects"}
+	if err := snapshotTar(root, out, excludes, includes, 0); err != nil {
+		t.Fatalf("snapshotTar: %v", err)
+	}
+	got := readTarGz(t, out)
+
+	for _, want := range []string{"notes.md", ".claude/skills/s.md", "deep/a/b/target.txt"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("allowlisted path missing from tar: %s", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"models/big.bin",                // not in the allowlist → ignored by default
+		".config/app.conf",              // not in the allowlist
+		"deep/a/other.txt",              // sibling outside the included subtree
+		".claude/projects/x/sess.jsonl", // in allowlist subtree but excluded subtracts
+	} {
+		if _, ok := got[unwanted]; ok {
+			t.Errorf("path outside the allowlist present in tar: %s", unwanted)
+		}
+	}
+	// ancestor dirs on the way to a slashed include are archived for structure.
+	if _, ok := got["deep/a/b/"]; !ok {
+		t.Error("ancestor dir deep/a/b/ missing")
+	}
+}
+
+func TestSnapshotTarEmptyIncludesArchivesAll(t *testing.T) {
+	// Empty includes must be identical to block-list mode (backward compatible).
+	root := allowlistTree(t)
+	out := filepath.Join(t.TempDir(), "a.tar.gz")
+	if err := snapshotTar(root, out, nil, nil, 0); err != nil {
+		t.Fatalf("snapshotTar: %v", err)
+	}
+	got := readTarGz(t, out)
+	if _, ok := got["models/big.bin"]; !ok {
+		t.Fatal("empty includes should archive everything, incl models/big.bin")
+	}
+}
+
+func TestSnapshotTarMaxBytesGuard(t *testing.T) {
+	root := t.TempDir()
+	// Incompressible payload so the gzip'd artifact can't shrink under the cap.
+	blob := make([]byte, 1<<20)
+	if _, err := rand.Read(blob); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "big.bin"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "capped.tar.gz")
+	err := snapshotTar(root, out, nil, nil, 64<<10) // 64 KiB cap << 1 MiB payload
+	if err == nil {
+		t.Fatal("want error when the staged tar exceeds max_bytes")
+	}
+	if !strings.Contains(err.Error(), "exceeded max size") {
+		t.Fatalf("error should name the size guard, got: %v", err)
+	}
+
+	// A generous cap must pass.
+	out2 := filepath.Join(t.TempDir(), "ok.tar.gz")
+	if err := snapshotTar(root, out2, nil, nil, 8<<20); err != nil {
+		t.Fatalf("generous cap should pass: %v", err)
 	}
 }
