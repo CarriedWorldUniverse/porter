@@ -12,7 +12,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -133,27 +132,5 @@ func loadOAuth() (drive.OAuth, error) {
 	if path == "" {
 		return drive.OAuth{}, fmt.Errorf("PORTER_DRIVE_OAUTH_FILE not set")
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return drive.OAuth{}, err
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return drive.OAuth{}, fmt.Errorf("oauth bundle %s has loose permissions %04o", path, perm)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return drive.OAuth{}, err
-	}
-	var b struct {
-		ClientID     string `json:"client_id"`
-		ClientSecret string `json:"client_secret"`
-		RefreshToken string `json:"refresh_token"`
-		TokenURI     string `json:"token_uri"`
-		Scope        string `json:"scope"`
-	}
-	if err := json.Unmarshal(data, &b); err != nil {
-		return drive.OAuth{}, err
-	}
-	return drive.OAuth{ClientID: b.ClientID, ClientSecret: b.ClientSecret,
-		RefreshToken: b.RefreshToken, TokenURI: b.TokenURI, Scope: b.Scope}, nil
+	return drive.OAuthFromBundleFile(path)
 }

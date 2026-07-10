@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	casket "github.com/CarriedWorldUniverse/casket-go"
 
+	"github.com/CarriedWorldUniverse/porter/internal/drive"
 	"github.com/CarriedWorldUniverse/porter/internal/gitreplica"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore"
+	"github.com/CarriedWorldUniverse/porter/internal/packstore/drivebackend"
 	"github.com/CarriedWorldUniverse/porter/internal/packstore/localdir"
 )
 
@@ -177,6 +180,44 @@ func cmdRepoSnapshot(storeDir, keyFile string, recipientFiles []string, name, re
 	}
 	fmt.Printf("snapshotted replica %q as bundle-%08d (%d refs)\n", name, seq, refsCount)
 	return nil
+}
+
+// cmdMirror copies every object from the localdir store at fromDir onto
+// dst, printing one summary line. It carries ciphertext only — no key file
+// is needed or accepted.
+func cmdMirror(fromDir string, dst packstore.Backend, destDesc string) error {
+	src, err := localdir.New(fromDir)
+	if err != nil {
+		return err
+	}
+	copied, skipped, err := packstore.Mirror(src, dst)
+	if err != nil {
+		return fmt.Errorf("mirroring: %w", err)
+	}
+	fmt.Printf("mirrored %d objects (%d already present) to %s\n", copied, skipped, destDesc)
+	return nil
+}
+
+// driveBackendFromEnv builds a packstore.Backend backed by Google Drive
+// under folderPath, using the oauth bundle named by PORTER_DRIVE_OAUTH_FILE.
+func driveBackendFromEnv(ctx context.Context, folderPath string) (packstore.Backend, error) {
+	path := os.Getenv("PORTER_DRIVE_OAUTH_FILE")
+	if path == "" {
+		return nil, fmt.Errorf("PORTER_DRIVE_OAUTH_FILE not set")
+	}
+	oauth, err := drive.OAuthFromBundleFile(path)
+	if err != nil {
+		return nil, err
+	}
+	client, err := drive.New(ctx, oauth.TokenSource(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("drive client: %w", err)
+	}
+	folderID, err := client.EnsureFolder(ctx, folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("ensure folder %q: %w", folderPath, err)
+	}
+	return drivebackend.New(ctx, client, folderID), nil
 }
 
 func cmdRepoRestore(storeDir, keyFile, name, outPath string) error {
